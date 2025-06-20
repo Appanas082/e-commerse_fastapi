@@ -26,3 +26,4 @@ class CreateUser(BaseModel):
 class CreateReview(BaseModel):
     comment: str
     grade: int
+    product_slug: str

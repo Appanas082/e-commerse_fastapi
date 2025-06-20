@@ -2,62 +2,71 @@ from fastapi import APIRouter, Depends, status, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated
 from sqlalchemy import insert, select
-from slugify import slugify
+from sqlalchemy import func
 
 from app.backend.db_depends import get_db
-from app.schemas import CreateProduct
+from app.schemas import CreateReview
 from app.models.products import Product
 from app.models.category import Category
+from app.models.reviews import Review
 from app.routers.auth import get_current_user
 
 from fastapi import APIRouter
 
-router = APIRouter(prefix="/products", tags=["products"])
+router = APIRouter(prefix="/reviews", tags=["reviews"])
 
 
 @router.get("/")
-async def all_products(db: Annotated[AsyncSession, Depends(get_db)]):
-    product = await db.scalars(
-        select(Product)
+async def all_reviews(db: Annotated[AsyncSession, Depends(get_db)]):
+    review = await db.scalars(
+        select(Review)
+        .join(Product)
         .join(Category)
-        .where(Product.is_active == True, Category.is_active == True, Product.stock > 0)
-    )
-    products = product.all()
-    if products is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="There is no products"
+        .where(
+            Review.is_active == True,
+            Product.is_active == True,
+            Category.is_active == True,
+            Product.stock > 0,
         )
-    return products
+    )
+    reviews = review.all()
+    if reviews is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="There is no reviews"
+        )
+    return reviews
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_product(
+async def add_review(
     db: Annotated[AsyncSession, Depends(get_db)],
-    create_product: CreateProduct,
+    create_review: CreateReview,
     get_user: Annotated[dict, Depends(get_current_user)],
 ):
-    if get_user.get("is_admin") or get_user.get("is_supplier"):
-        category = await db.scalar(
-            select(Category).where(Category.id == create_product.category)
+    if get_user.get("is_customer"):
+        product = await db.scalar(
+            select(Product).where(Product.slug == create_review.product_slug)
         )
-        if category is None:
+        if product is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="There is no category found",
+                detail="There is no product found",
             )
         await db.execute(
-            insert(Product).values(
-                name=create_product.name,
-                description=create_product.description,
-                slug=slugify(create_product.name),
-                rating=0.0,
-                price=create_product.price,
-                image_url=create_product.image_url,
-                stock=create_product.stock,
-                category_id=create_product.category,
-                supplier_id=get_user.get("id"),
+            insert(Review).values(
+                user_id=get_user.get("id"),
+                product_id=product.id,
+                comment=create_review.comment,
+                grade=create_review.grade,
             )
         )
+        avg_rating = await db.scalar(
+            select(func.avg(Review.grade)).where(
+                Review.product_id == product.id,
+                Review.is_active == True
+            )
+        )
+        product.rating = avg_rating
         await db.commit()
         return {"status_code": status.HTTP_201_CREATED, "transaction": "Successful"}
     else:
@@ -67,122 +76,46 @@ async def create_product(
         )
 
 
-@router.get("/{category_slug}")
-async def product_by_category(
-    db: Annotated[AsyncSession, Depends(get_db)], category_slug: str
-):
-    category = await db.scalar(select(Category).where(Category.slug == category_slug))
-    if category is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Category no found"
-        )
-
-    subcategory = await db.scalars(
-        select(Category).where(Category.parent_id == category.id)
-    )
-    subcategories = subcategory.all()
-    categories = [category.id] + [i.id for i in subcategories]
-    product = await db.scalars(
-        select(Product).where(
-            Product.is_active == True,
-            Product.stock > 0,
-            Product.category_id.in_(categories),
-        )
-    )
-    products = product.all()
-    return products
-
-
-@router.get("/detail/{product_slug}")
-async def product_detail(
+@router.get("/{product_slug}")
+async def products_reviews(
     db: Annotated[AsyncSession, Depends(get_db)], product_slug: str
 ):
     product = await db.scalar(select(Product).where(Product.slug == product_slug))
     if product is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="There is no product found"
-        )
-    return product
-
-
-@router.put("/{product_slug}")
-async def update_product(
-    db: Annotated[AsyncSession, Depends(get_db)],
-    product_slug: str,
-    update_product: CreateProduct,
-    get_user: Annotated[dict, Depends(get_current_user)],
-):
-    if get_user.get("is_admin") or get_user.get("is_supplier"):
-        product = await db.scalar(select(Product).where(Product.slug == product_slug))
-        if product is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="There is no product found",
-            )
-        if get_user.get("id") == product.supplier_id or get_user.get("is_admin"):
-            category = await db.scalar(
-                select(Category).where(Category.id == update_product.category)
-            )
-            if category is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="There is no category found",
-                )
-
-            product.name = update_product.name
-            product.slug = slugify(update_product.name)
-            product.description = update_product.description
-            product.price = update_product.price
-            product.image_url = update_product.image_url
-            product.stock = update_product.stock
-            product.category_id = update_product.category
-
-            await db.commit()
-            return {
-                "status_code": status.HTTP_200_OK,
-                "transaction": "Product update is successful",
-            }
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not authorized to use this method",
-            )
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to use this method",
+            status_code=status.HTTP_404_NOT_FOUND, detail="Product no found"
         )
 
+    review = await db.scalars(
+        select(Review).where(Review.is_active == True, Review.product_id == product.id)
+    )
+    reviews = review.all()
+    return reviews
 
-@router.delete("/{product_slug}")
+
+@router.delete("/{review_id}")
 async def delete_product(
     db: Annotated[AsyncSession, Depends(get_db)],
-    product_slug: str,
+    review_id: int,
     get_user: Annotated[dict, Depends(get_current_user)],
 ):
-    if get_user.get("is_admin") or get_user.get("is_supplier"):
-        product = await db.scalar(
-            select(Product).where(
-                Product.slug == product_slug, Product.is_active == True
+    if get_user.get("is_admin"):
+        review = await db.scalar(
+            select(Review).where(
+                Review.id == review_id, Review.is_active == True
             )
         )
-        if product is None:
+        if review is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="There is no product found",
+                detail="There is no review found",
             )
-        if get_user.get("id") == product.supplier_id or get_user.get("is_admin"):
-            product.is_active = False
-            await db.commit()
-            return {
-                "status_code": status.HTTP_200_OK,
-                "transaction": "Product delete is successful",
-            }
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not authorized to use this method",
-            )
+        review.is_active = False
+        await db.commit()
+        return {
+            "status_code": status.HTTP_200_OK,
+            "transaction": "Review delete is successful",
+        }
     else:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

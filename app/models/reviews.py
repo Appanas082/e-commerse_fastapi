@@ -10,15 +10,10 @@ class Review(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    product_id = Column(Integer, ForeignKey("product.id"))
+    product_id = Column(Integer, ForeignKey("products.id"))
     comment = Column(String)
     comment_date = Column(DateTime, default=datetime.now())
     grade = Column(Float)
     is_active = Column(Boolean, default=True)
 
     user = relationship("User", back_populates="reviews", uselist=False)
-
-
-from sqlalchemy.schema import CreateTable
-
-print(CreateTable(Review.__table__))
