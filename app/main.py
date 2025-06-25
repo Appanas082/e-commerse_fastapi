@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from app.routers import category, products, auth, permission, reviews
+from .log import log_middleware
 
 app = FastAPI()
+
+app.middleware("http")(log_middleware)
 
 
 @app.get("/")
